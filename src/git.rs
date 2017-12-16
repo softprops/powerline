@@ -1,3 +1,5 @@
+//! Git segments
+
 use std::io;
 
 use git2::{self, BranchType, Repository, StatusOptions, StatusShow};
