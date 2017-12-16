@@ -63,7 +63,7 @@ pub fn segments() -> io::Result<Vec<Segment>> {
                 if ahead > 0 {
                     segs.push(Segment::new(
                         format!(
-                            " {}\u{2714} ",
+                            " {}\u{2B06} ",
                             if ahead > 1 {
                                 ahead.to_string()
                             } else {
@@ -77,7 +77,7 @@ pub fn segments() -> io::Result<Vec<Segment>> {
                 if behind > 0 {
                     segs.push(Segment::new(
                         format!(
-                            " {}\u{2714} ",
+                            " {}\u{2B07} ",
                             if behind > 1 {
                                 behind.to_string()
                             } else {
