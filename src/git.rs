@@ -161,8 +161,22 @@ pub fn segments() -> io::Result<Vec<Segment>> {
                 color::BRIGHT_GREEN,
             ))
         }
-    }
+        if conflicted > 0 {
+            segs.push(Segment::new(
+                format!(
+                    " {}\u{273C} ",
+                    if conflicted > 1 {
+                        conflicted.to_string()
+                    } else {
+                        "".into()
+                    }
+                ),
+                color::BRIGHT_WHITE,
+                color::BRIGHT_GREEN,
+            ))
+        }
 
+    }
 
     Ok(segs)
 }

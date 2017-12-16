@@ -46,7 +46,7 @@ fn main() {
                 .value_name("string")
                 .possible_values(&["cwd", "git", "k8s"])
                 .value_delimiter(",")
-                .default_value("cwd,git,k8s"),
+                .default_value("cwd,git"),
         )
         .get_matches();
     let segments: Vec<SegmentType> = matches
