@@ -1,122 +1,168 @@
-use std::{env, io, process};
-use std::collections::HashMap;
+use std::io;
 
-use regex::Regex;
+use git2::{self, BranchType, Repository, StatusOptions, StatusShow};
 use term::color;
 
 use Segment;
 
-
-const BRANCH_INFO: &str =
-    r"^## (?P<local>\S+?)(\.{3}(?P<remote>\S+?)( \[(ahead (?P<ahead>\d+)(, )?)?(behind (?P<behind>\d+))?])?)?$";
-
-fn status() -> io::Result<String> {
-    let mut cmd = process::Command::new("git");
-    cmd.arg("status").arg("--porcelain").arg("-b").env(
-        "LANG",
-        "C",
-    );
-    if let Some(home) = env::home_dir() {
-        cmd.env("HOME", home);
-    }
-    if let Some(path) = env::var("PATH").ok() {
-        cmd.env("PATH", path);
-    }
-    Ok(String::from_utf8(cmd.output()?.stdout).unwrap())
-}
-
 pub fn segments() -> io::Result<Vec<Segment>> {
-    let status = status()?;
-    // parse untracked, confliects, staged, and unstaged
-    let mut result = status.lines().skip(1).filter(|l| l.len() > 0).fold(
-        HashMap::new(),
-        |mut result, line| {
-            match &line[..2] {
-                "??" => {
-                    *result.entry("untracked").or_insert(0) += 1;
-                }
-                "UU" => {
-                    *result.entry("conflicts").or_insert(0) += 1;
-                }
-                "DD" | "AU" | "UD" | "UA" | "DU" | "AA" => (),
-                code => {
-                    if code.chars().nth(0) != Some(' ') {
-                        *result.entry("staged").or_insert(0) += 1;
-                    }
-                    if code.chars().nth(1) != Some(' ') {
-                        *result.entry("unstaged").or_insert(0) += 1;
-                    }
-                }
-            }
-            result
-        },
-    );
+    let repo = Repository::discover(".").ok();
+    let mut segs = vec![];
 
-    let branch = status.lines().next().and_then(|line| {
-        let re = Regex::new(BRANCH_INFO).unwrap();
-        re.captures(line).and_then(|caps| {
-            caps.name("local").map(|m| {
-                let branch = m.as_str();
-                if let Some(ahead) = caps.name("ahead") {
-                    *result.entry("ahead").or_insert(0) +=
-                        ahead.as_str().parse().unwrap()
+    // (branch, maybe_local, maybe_upstream)
+    let branch_info = repo.as_ref().and_then(|r| {
+        r.branches(Some(BranchType::Local))
+            .unwrap()
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter_map(move |(ref branch, _)| {
+                if branch.is_head() {
+                    let local = branch.get().target();
+                    let upstream =
+                        branch.upstream().ok().and_then(|b| b.get().target());
+                    if let Ok(name) = branch.name() {
+                        if let Some(name) = name {
+                            return Some((name.to_string(), local, upstream));
+                        }
+                    }
                 }
-                if let Some(behind) = caps.name("behind") {
-                    *result.entry("behind").or_insert(0) +=
-                        behind.as_str().parse().unwrap()
-                }
-                branch
+                None
             })
-        })
+            .next()
     });
 
-    let mut segs = vec![];
+    let statuses = repo.as_ref().and_then(|repo| {
+        repo.statuses(Some(
+            StatusOptions::new()
+                .show(StatusShow::IndexAndWorkdir)
+                .include_untracked(true),
+        )).ok()
+    });
+    //let clean = statuses.as_ref().map(|s| s.is_empty()).unwrap_or(false);
+
     segs.push(Segment::new(
-        format!(" \u{e0a0} {} ", branch.unwrap_or("Big Bang")),
+        format!(
+            " \u{e0a0} {} ",
+            branch_info
+                .as_ref()
+                .map(|&(ref branch, _, _)| branch)
+                .unwrap_or(&"Big Bang".to_string())
+        ),
         color::BRIGHT_WHITE,
         color::BRIGHT_BLACK,
     ));
-    if let Some(staged) = result.get("staged") {
-        segs.push(Segment::new(
-            format!(
-                " {}\u{2714} ",
-                if *staged > 1 {
-                    staged.to_string()
-                } else {
-                    "".into()
+
+    // # to push / # to pull
+    for repo in repo.as_ref() {
+        if let Some((_, Some(local), Some(upstream))) = branch_info {
+            if let Ok((ahead, behind)) =
+                repo.graph_ahead_behind(local, upstream)
+            {
+                if ahead > 0 {
+                    segs.push(Segment::new(
+                        format!(
+                            " {}\u{2714} ",
+                            if ahead > 1 {
+                                ahead.to_string()
+                            } else {
+                                "".into()
+                            }
+                        ),
+                        color::BRIGHT_WHITE,
+                        color::BRIGHT_BLACK,
+                    ))
                 }
-            ),
-            color::BRIGHT_WHITE,
-            color::BRIGHT_YELLOW,
-        ))
-    }
-    if let Some(unstaged) = result.get("unstaged") {
-        segs.push(Segment::new(
-            format!(
-                " {}\u{270E} ",
-                if *unstaged > 1 {
-                    unstaged.to_string()
-                } else {
-                    "".into()
+                if behind > 0 {
+                    segs.push(Segment::new(
+                        format!(
+                            " {}\u{2714} ",
+                            if behind > 1 {
+                                behind.to_string()
+                            } else {
+                                "".into()
+                            }
+                        ),
+                        color::BRIGHT_WHITE,
+                        color::BRIGHT_BLACK,
+                    ))
                 }
-            ),
-            color::BRIGHT_WHITE,
-            color::BRIGHT_RED,
-        ))
+            }
+        }
     }
-    if let Some(untracked) = result.get("untracked") {
-        segs.push(Segment::new(
-            format!(
-                " {}? ",
-                if *untracked > 1 {
-                    untracked.to_string()
-                } else {
-                    "".into()
-                }
-            ),
-            color::BRIGHT_WHITE,
-            color::BRIGHT_GREEN,
-        ))
+
+    // file stats
+    if let Some(statuses) = statuses {
+        let mut staged = 0;
+        let mut unstaged = 0;
+        let mut conflicted = 0;
+        let mut untracked = 0;
+        for status in statuses.iter() {
+            let status = status.status();
+            if status.contains(git2::STATUS_INDEX_NEW) ||
+                status.contains(git2::STATUS_INDEX_MODIFIED) ||
+                status.contains(git2::STATUS_INDEX_TYPECHANGE) ||
+                status.contains(git2::STATUS_INDEX_RENAMED) ||
+                status.contains(git2::STATUS_INDEX_DELETED)
+            {
+                staged += 1;
+            }
+            if status.contains(git2::STATUS_WT_MODIFIED) ||
+                status.contains(git2::STATUS_WT_TYPECHANGE) ||
+                status.contains(git2::STATUS_WT_DELETED)
+            {
+                unstaged += 1;
+            }
+            if status.contains(git2::STATUS_WT_NEW) {
+                untracked += 1;
+            }
+            if status.contains(git2::STATUS_CONFLICTED) {
+                conflicted += 1;
+            }
+        }
+        if staged > 0 {
+            segs.push(Segment::new(
+                format!(
+                    " {}\u{2714} ",
+                    if staged > 1 {
+                        staged.to_string()
+                    } else {
+                        "".into()
+                    }
+                ),
+                color::BRIGHT_WHITE,
+                color::BRIGHT_YELLOW,
+            ))
+        }
+        if unstaged > 0 {
+            segs.push(Segment::new(
+                format!(
+                    " {}\u{270E} ",
+                    if unstaged > 1 {
+                        unstaged.to_string()
+                    } else {
+                        "".into()
+                    }
+                ),
+                color::BRIGHT_WHITE,
+                color::BRIGHT_RED,
+            ))
+        }
+        if untracked > 0 {
+            segs.push(Segment::new(
+                format!(
+                    " {}? ",
+                    if untracked > 1 {
+                        untracked.to_string()
+                    } else {
+                        "".into()
+                    }
+                ),
+                color::BRIGHT_WHITE,
+                color::BRIGHT_GREEN,
+            ))
+        }
     }
+
+
     Ok(segs)
 }

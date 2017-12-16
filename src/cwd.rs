@@ -1,10 +1,9 @@
-use term;
-
-use super::Segment;
-
 use std::{env, io};
 use std::path::{Path, PathBuf};
-use term::color;
+
+use term::{self, color};
+
+use Segment;
 
 const HOME: &str = "~";
 

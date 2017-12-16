@@ -1,5 +1,6 @@
 extern crate term;
 extern crate regex;
+extern crate git2;
 
 use std::io;
 use std::str::FromStr;
